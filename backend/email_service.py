@@ -1,12 +1,12 @@
 import os
-import requests
 import time
+import datetime
+import requests
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 
 class EmailService:
-    def __init__(self, provider, credentials, progress_callback=None):
-        self.provider = provider
+    def __init__(self, credentials, progress_callback=None):
         self.credentials = credentials
         self.progress_callback = progress_callback
 
@@ -14,69 +14,85 @@ class EmailService:
         if self.progress_callback:
             self.progress_callback(current, total)
 
-    def _request_with_retry(self, method, url, **kwargs):
-        max_retries = 3
-        backoff = 1
-        for i in range(max_retries):
-            try:
-                response = requests.request(method, url, **kwargs)
-                if response.status_code == 429:
-                    time.sleep(backoff); backoff *= 2; continue
-                return response
-            except Exception:
-                time.sleep(backoff); backoff *= 2
-        return None
+    def _get_service(self):
+        creds = Credentials(**self.credentials)
+        return build('gmail', 'v1', credentials=creds)
 
     def fetch_emails(self, max_results=1000, time_range_days=180):
-        if self.provider == 'gmail': return self._fetch_gmail(max_results, time_range_days)
-        if self.provider == 'outlook': return self._fetch_outlook(max_results, time_range_days)
-        return []
+        service = self._get_service()
+        emails = []
+        page_token = None
 
-    def _fetch_gmail(self, max_results, time_range_days):
-        creds = Credentials(**self.credentials)
-        service = build('gmail', 'v1', credentials=creds)
-        emails = []; page_token = None
-        import datetime
         date_cutoff = (datetime.datetime.now() - datetime.timedelta(days=time_range_days)).strftime('%Y/%m/%d')
         query = f'after:{date_cutoff}'
-        while len(emails) < max_results:
-            results = service.users().messages().list(userId='me', q=query, maxResults=100, pageToken=page_token).execute()
-            messages = results.get('messages', [])
-            if not messages: break
-            for msg in messages:
-                m = service.users().messages().get(userId='me', id=msg['id'], format='metadata').execute()
-                headers = m.get('payload', {}).get('headers', [])
-                subject = next((h['value'] for h in headers if h['name'].lower() == 'subject'), 'No Subject')
-                sender = next((h['value'] for h in headers if h['name'].lower() == 'from'), 'Unknown')
-                emails.append({'id': m['id'], 'subject': subject, 'sender': sender, 'size': int(m.get('sizeEstimate', 0)), 'snippet': m.get('snippet', ''), 'date': next((h['value'] for h in headers if h['name'].lower() == 'date'), '')})
-                self._report_progress(len(emails), max_results)
-                if len(emails) >= max_results: break
-            page_token = results.get('nextPageToken')
-            if not page_token: break
-        return emails
 
-    def _fetch_outlook(self, max_results, time_range_days):
-        headers = {'Authorization': f"Bearer {self.credentials.get('access_token')}"}
-        emails = []; import datetime
-        date_cutoff = (datetime.datetime.now() - datetime.timedelta(days=time_range_days)).isoformat() + "Z"
-        url = f"https://graph.microsoft.com/v1.0/me/messages?$filter=receivedDateTime ge {date_cutoff}&$top=50"
-        while url and len(emails) < max_results:
-            resp = self._request_with_retry('GET', url, headers=headers)
-            if not resp or resp.status_code != 200: break
-            data = resp.json(); messages = data.get('value', [])
-            for m in messages:
-                emails.append({'id': m['id'], 'subject': m.get('subject'), 'sender': m.get('from', {}).get('emailAddress', {}).get('address'), 'size': int(m.get('size', 0)), 'date': m.get('receivedDateTime')})
-                self._report_progress(len(emails), max_results)
-                if len(emails) >= max_results: break
-            url = data.get('@odata.nextLink')
+        while len(emails) < max_results:
+            try:
+                results = service.users().messages().list(
+                    userId='me',
+                    q=query,
+                    maxResults=min(100, max_results - len(emails)),
+                    pageToken=page_token
+                ).execute()
+
+                messages = results.get('messages', [])
+                if not messages:
+                    break
+
+                # Batch get metadata
+                batch = service.new_batch_http_request()
+                batch_results = []
+
+                def callback(request_id, response, exception):
+                    if exception is None:
+                        batch_results.append(response)
+
+                for msg in messages:
+                    batch.add(service.users().messages().get(userId='me', id=msg['id'], format='metadata'), callback=callback)
+
+                batch.execute()
+
+                for m in batch_results:
+                    headers = m.get('payload', {}).get('headers', [])
+                    subject = next((h['value'] for h in headers if h['name'].lower() == 'subject'), 'No Subject')
+                    sender = next((h['value'] for h in headers if h['name'].lower() == 'from'), 'Unknown')
+                    date = next((h['value'] for h in headers if h['name'].lower() == 'date'), '')
+
+                    emails.append({
+                        'id': m['id'],
+                        'subject': subject,
+                        'sender': sender,
+                        'size': int(m.get('sizeEstimate', 0)),
+                        'snippet': m.get('snippet', ''),
+                        'date': date
+                    })
+                    self._report_progress(len(emails), max_results)
+                    if len(emails) >= max_results:
+                        break
+
+                page_token = results.get('nextPageToken')
+                if not page_token:
+                    break
+
+            except Exception as e:
+                # Basic backoff if rate limited
+                if "rateLimitExceeded" in str(e):
+                    time.sleep(2)
+                    continue
+                break
+
         return emails
 
     def delete_emails(self, email_ids):
-        if self.provider == 'gmail':
-            creds = Credentials(**self.credentials)
-            service = build('gmail', 'v1', credentials=creds)
-            for eid in email_ids: service.users().messages().trash(userId='me', id=eid).execute()
-        elif self.provider == 'outlook':
-            headers = {'Authorization': f"Bearer {self.credentials.get('access_token')}"}
-            for eid in email_ids: self._request_with_retry('POST', f"https://graph.microsoft.com/v1.0/me/messages/{eid}/move", headers=headers, json={"destinationId": "deleteditems"})
+        service = self._get_service()
+        # Batch delete (trash)
+        # Gmail batch trash is not directly available via one call for individual IDs
+        # in the same way, but we can batch the requests.
+        for i in range(0, len(email_ids), 50):
+            batch = service.new_batch_http_request()
+            chunk = email_ids[i:i+50]
+            for eid in chunk:
+                batch.add(service.users().messages().trash(userId='me', id=eid))
+            batch.execute()
+            time.sleep(0.1) # Slight pause between batches
         return True

@@ -4,7 +4,7 @@ import { io } from 'socket.io-client';
 import { Mail, ShieldCheck, Sparkles, AlertCircle, AlertTriangle, Loader2, RefreshCw, Sun, Moon, Database, TrendingDown, Trash2, Info, Filter, ArrowUpDown, X, ShieldAlert, Calendar } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-const API_BASE_URL = 'http://localhost:5000';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 // --- Components ---
 
@@ -21,16 +21,15 @@ const ThemeToggle = () => {
   );
 };
 
-const Layout = ({ children, user }) => (
+const Layout = ({ children }) => (
   <div className="min-h-screen flex flex-col bg-white dark:bg-[#121212] text-gray-900 dark:text-gray-100 transition-colors duration-200">
     <header className="bg-white dark:bg-[#121212] border-b border-gray-200 dark:border-gray-800 sticky top-0 z-10">
       <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-white font-bold">M</div>
+          <div className="w-8 h-8 bg-[#3f51b5] rounded-lg flex items-center justify-center text-white font-bold">M</div>
           <h1 className="text-xl font-bold hidden sm:block">Mail Manager</h1>
         </div>
         <div className="flex items-center gap-4">
-          {user && <span className="text-sm text-gray-500">Connected</span>}
           <ThemeToggle />
         </div>
       </div>
@@ -77,6 +76,12 @@ const Dashboard = ({ stats }) => {
 const DeletionDialog = ({ isOpen, sender, onConfirm, onCancel, isDeleting, isBulk = false }) => {
   const [doubleConfirm, setDoubleConfirm] = useState(false);
   if (!isOpen || !sender) return null;
+
+  const getCount = () => {
+    if (isBulk) return sender.reduce((acc, s) => acc + s.count, 0);
+    return sender.count;
+  };
+
   return (
     <AnimatePresence>
       <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
@@ -86,7 +91,7 @@ const DeletionDialog = ({ isOpen, sender, onConfirm, onCancel, isDeleting, isBul
             {doubleConfirm ? <ShieldAlert className="w-6 h-6 text-white" /> : <AlertTriangle className="w-6 h-6 text-red-600" />}
           </div>
           <h3 className="text-xl font-bold mb-2">{doubleConfirm ? 'Are you absolutely sure?' : (isBulk ? 'Bulk Delete Recommended?' : 'Delete Emails?')}</h3>
-          <p className="text-gray-500 mb-6">{doubleConfirm ? 'This will move these emails to the trash. It is a major action.' : (isBulk ? 'This will clean all senders identified as safe.' : 'This will move selected emails to the trash.')}</p>
+          <p className="text-gray-500 mb-6">{doubleConfirm ? `This will move ${getCount()} emails to the trash. This action is reversible from your trash folder.` : (isBulk ? `This will clean ${getCount()} emails from all senders identified as safe.` : `This will move ${getCount()} emails from ${sender.sender} to the trash.`)}</p>
           <div className="flex gap-3">
             <button disabled={isDeleting} onClick={() => doubleConfirm ? onConfirm() : setDoubleConfirm(true)} className={`flex-1 ${doubleConfirm ? 'bg-red-700' : 'bg-red-600'} text-white font-bold py-3 rounded-xl transition-all`}>{isDeleting ? 'Processing...' : 'Confirm'}</button>
             <button onClick={onCancel} className="flex-1 bg-gray-100 dark:bg-gray-800 font-bold py-3 rounded-xl">Cancel</button>
@@ -104,11 +109,9 @@ export default function App() {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(false);
   const [scanProgress, setScanProgress] = useState(null);
-  const [selectedSender, setSelectedSender] = useState(null);
   const [senderToDelete, setSenderToDelete] = useState(null);
   const [isBulkDelete, setIsBulkDelete] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [socket, setSocket] = useState(null);
 
   const startScan = useCallback(async (sid) => {
     setLoading(true); setScanProgress({ current: 0, total: 1000 });
@@ -119,7 +122,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const s = io(API_BASE_URL); setSocket(s);
+    const s = io(API_BASE_URL);
     if (sessionId) s.emit('join', { session_id: sessionId });
     s.on('scan_progress', data => setScanProgress(data));
     const handleMsg = e => {
@@ -135,7 +138,7 @@ export default function App() {
   const handleDelete = async () => {
     setIsDeleting(true);
     try {
-      const ids = isBulkDelete ? senderToDelete.flatMap(s => s.sample_emails.map(em => em.id)) : senderToDelete.sample_emails.map(em => em.id);
+      const ids = isBulkDelete ? senderToDelete.flatMap(s => s.all_ids) : senderToDelete.all_ids;
       await axios.post(`${API_BASE_URL}/api/delete`, { session_id: sessionId, email_ids: ids });
       await startScan(sessionId); setSenderToDelete(null); setIsBulkDelete(false);
     } catch (e) { console.error(e); } finally { setIsDeleting(false); }
@@ -145,19 +148,18 @@ export default function App() {
     return (
       <Layout>
         <div className="max-w-4xl mx-auto py-20 text-center">
-          <h2 className="text-5xl font-extrabold mb-6">Clean Inbox. <span className="text-primary">Free Space.</span></h2>
-          <p className="text-xl text-gray-500 mb-12">The privacy-first email cleaner. No data stored. No persistent tokens.</p>
-          <div className="flex justify-center gap-4">
-            <button onClick={() => axios.get(`${API_BASE_URL}/auth/google/login`).then(r => window.open(r.data.url, '_blank', 'width=600,height=600'))} className="bg-white text-black border p-4 rounded-xl font-bold flex items-center gap-2 shadow-sm hover:bg-gray-50">Connect Gmail</button>
-            <button onClick={() => axios.get(`${API_BASE_URL}/auth/outlook/login`).then(r => window.open(r.data.url, '_blank', 'width=600,height=600'))} className="bg-white text-black border p-4 rounded-xl font-bold flex items-center gap-2 shadow-sm hover:bg-gray-50">Connect Outlook</button>
-          </div>
+          <h2 className="text-5xl font-extrabold mb-6">Clean Inbox. <span className="text-[#3f51b5]">Free Space.</span></h2>
+          <p className="text-xl text-gray-500 mb-12">The privacy-first Gmail cleaner. No data stored. No persistent tokens.</p>
+          <button onClick={() => axios.get(`${API_BASE_URL}/auth/google/login`).then(r => window.open(r.data.url, '_blank', 'width=600,height=600'))} className="bg-[#3f51b5] text-white p-4 rounded-xl font-bold flex items-center gap-2 mx-auto shadow-lg hover:opacity-90">
+             Connect Gmail
+          </button>
         </div>
       </Layout>
     );
   }
 
   return (
-    <Layout user={true}>
+    <Layout>
       <div className="space-y-8">
         <div className="flex justify-between items-center">
           <h2 className="text-2xl font-bold">Analysis Results</h2>
@@ -168,7 +170,7 @@ export default function App() {
         </div>
         {loading ? (
           <div className="flex flex-col items-center py-20 gap-4">
-            <Loader2 className="w-12 h-12 animate-spin text-primary" />
+            <Loader2 className="w-12 h-12 animate-spin text-[#3f51b5]" />
             <p className="font-bold">Scanning... {scanProgress ? `${scanProgress.current} emails` : ''}</p>
           </div>
         ) : stats && (

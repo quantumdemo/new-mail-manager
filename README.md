@@ -1,9 +1,9 @@
 # Mail Manager
 
-Privacy-first, stateless web application to analyze and clean your email inbox.
+Privacy-first, stateless web application to analyze and clean your Gmail inbox.
 
 ## Features
-- **Secure OAuth**: Gmail & Outlook support.
+- **Secure Google OAuth**: Connect your Gmail account safely.
 - **Stateless**: No database, no persistent storage of tokens.
 - **AI Analysis**: Smart grouping and recommendations.
 - **Quick Clean**: One-click cleanup for safe-to-delete emails.
@@ -12,7 +12,7 @@ Privacy-first, stateless web application to analyze and clean your email inbox.
 ## Setup
 ### Backend
 1. `cd backend && pip install -r requirements.txt`
-2. Configure `.env` with Google/MS credentials.
+2. Configure `.env` with `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
 3. `python app.py`
 
 ### Frontend
@@ -28,8 +28,3 @@ Privacy-first, stateless web application to analyze and clean your email inbox.
 - Build: `npm run build`
 - Dir: `frontend/dist`
 - Create `frontend/public/_redirects`: `/* /index.html 200`
-
-## Security
-- Tokens kept only in-memory.
-- Session expires after 30 mins.
-- HTTPS required for production.
