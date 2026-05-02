@@ -1,0 +1,9 @@
+@import "tailwindcss";
+@theme {
+  --color-primary: #3f51b5;
+  --color-accent: #009688;
+  --color-error: #f44336;
+}
+:root { font-family: Inter, system-ui, sans-serif; }
+body { @apply bg-white text-gray-900 transition-colors duration-200; }
+.dark body { @apply bg-[#121212] text-gray-100; }
