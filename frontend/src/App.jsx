@@ -142,14 +142,10 @@ export default function App() {
     return () => { window.removeEventListener('message', handleMsg); s.close(); };
   }, [sessionId, startScan]);
 
-  const handleLogin = async () => {
+  const handleLogin = () => {
     setError(null);
-    try {
-      const res = await axios.get(`${API_BASE_URL}/auth/google/login`);
-      window.open(res.data.url, '_blank', 'width=600,height=600');
-    } catch (e) {
-      setError("Failed to initiate login. Please try again.");
-    }
+    // Direct link instead of axios get to ensure consistent session handling
+    window.open(`${API_BASE_URL}/auth/google/login`, 'Auth', 'width=600,height=600');
   };
 
   const handleDelete = async () => {

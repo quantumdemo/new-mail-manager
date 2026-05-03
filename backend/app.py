@@ -3,7 +3,7 @@ import datetime
 import threading
 import time
 import logging
-from flask import Flask, request, jsonify, session, url_for
+from flask import Flask, request, jsonify, session, url_for, redirect
 from flask_cors import CORS
 from flask_socketio import SocketIO
 from dotenv import load_dotenv
@@ -25,7 +25,7 @@ is_prod = os.getenv("FLASK_ENV") == "production"
 app.config.update(
     SESSION_COOKIE_SECURE=is_prod,
     SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='None' if is_prod else 'Lax',
+    SESSION_COOKIE_SAMESITE='Lax', # Using Lax for better compatibility with redirects
     PERMANENT_SESSION_LIFETIME=datetime.timedelta(minutes=30)
 )
 
@@ -56,38 +56,37 @@ def update_activity(sid):
 
 @app.route('/auth/google/login')
 def google_login():
-    # Use 127.0.0.1 if calling from localhost to maintain cookie consistency
     callback_url = url_for('google_callback', _external=True)
-    if "localhost" in callback_url:
-        callback_url = callback_url.replace("localhost", "127.0.0.1")
-
     flow = get_google_flow(callback_url)
-    authorization_url, state = flow.authorization_url()
+    authorization_url, state = flow.authorization_url(prompt='consent')
 
     session.permanent = True
     session['google_state'] = state
-    logger.info(f"Initiating login. Stored state: {state}")
+    logger.info(f"Initiating login. Stored state in session: {state}")
 
-    return jsonify({'url': authorization_url})
+    # Use direct redirect to ensure cookie is set correctly by browser
+    return redirect(authorization_url)
 
 @app.route('/auth/google/callback')
 def google_callback():
     stored_state = session.get('google_state')
     received_state = request.args.get('state')
 
-    logger.info(f"Callback received. Stored state: {stored_state}, Received state: {received_state}")
+    logger.info(f"Callback received. Session State: {stored_state}, Received State: {received_state}")
 
     if not stored_state or received_state != stored_state:
-        return jsonify({
-            "error": "Invalid state parameter",
-            "details": f"Stored: {stored_state}, Received: {received_state}. Ensure you are accessing the app via the same hostname (e.g., 127.0.0.1 vs localhost)."
-        }), 400
+        # Fallback for common development issues: ensure same hostname
+        return f"""
+        <html><body>
+            <h3>Security Error: Invalid state parameter.</h3>
+            <p>Stored: {stored_state}, Received: {received_state}</p>
+            <p>This often happens if you access the app via 127.0.0.1 but the redirect happens to localhost (or vice versa).</p>
+            <p>Please ensure you are using the exact same address for both the frontend and Google Console.</p>
+            <button onclick="window.close()">Close Window</button>
+        </body></html>
+        """, 400
 
-    # Reconstruct flow for token fetch
     callback_url = url_for('google_callback', _external=True)
-    if "localhost" in callback_url:
-        callback_url = callback_url.replace("localhost", "127.0.0.1")
-
     flow = get_google_flow(callback_url)
     flow.fetch_token(authorization_response=request.url)
 
