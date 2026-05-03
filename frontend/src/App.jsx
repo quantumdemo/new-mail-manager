@@ -105,7 +105,7 @@ const DeletionDialog = ({ isOpen, sender, onConfirm, onCancel, isDeleting, isBul
 // --- Main App ---
 
 export default function App() {
-  const [sessionId, setSessionId] = useState(localStorage.getItem('session_id'));
+  const [sessionId, setSessionId] = useState(sessionStorage.getItem('session_id'));
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(false);
   const [scanProgress, setScanProgress] = useState(null);
@@ -127,7 +127,7 @@ export default function App() {
     s.on('scan_progress', data => setScanProgress(data));
     const handleMsg = e => {
       if (e.data.type === 'AUTH_SUCCESS') {
-        setSessionId(e.data.session_id); localStorage.setItem('session_id', e.data.session_id);
+        setSessionId(e.data.session_id); sessionStorage.setItem('session_id', e.data.session_id);
         s.emit('join', { session_id: e.data.session_id }); startScan(e.data.session_id);
       }
     };
@@ -165,7 +165,7 @@ export default function App() {
           <h2 className="text-2xl font-bold">Analysis Results</h2>
           <div className="flex gap-4">
             <button onClick={() => startScan(sessionId)} className="bg-gray-100 dark:bg-gray-800 px-4 py-2 rounded-lg font-medium">Refresh</button>
-            <button onClick={() => { axios.post(`${API_BASE_URL}/auth/logout`, { session_id: sessionId }); setSessionId(null); localStorage.removeItem('session_id'); }} className="text-red-500 font-medium">Logout</button>
+            <button onClick={() => { axios.post(`${API_BASE_URL}/auth/logout`, { session_id: sessionId }); setSessionId(null); sessionStorage.removeItem('session_id'); }} className="text-red-500 font-medium">Logout</button>
           </div>
         </div>
         {loading ? (

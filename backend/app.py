@@ -15,8 +15,9 @@ app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret")
 
 # Security Refinements
+is_prod = os.getenv("FLASK_ENV") == "production"
 app.config.update(
-    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_SECURE=is_prod,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
     PERMANENT_SESSION_LIFETIME=datetime.timedelta(minutes=30)
@@ -26,31 +27,38 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 CORS(app, supports_credentials=True, origins=[FRONTEND_URL])
 socketio = SocketIO(app, cors_allowed_origins=FRONTEND_URL)
 
-# In-memory session store with cleanup
+# In-memory session store
 user_sessions = {}
 session_lock = threading.Lock()
 
 def cleanup_sessions():
+    """Periodically remove sessions after 30 minutes of inactivity"""
     while True:
-        time.sleep(600)
+        time.sleep(300) # Every 5 mins
         now = time.time()
         with session_lock:
-            to_delete = [sid for sid, data in user_sessions.items() if now - data.get('created_at', 0) > 3600]
+            # 1800 seconds = 30 minutes
+            to_delete = [sid for sid, data in user_sessions.items() if now - data.get('last_accessed', 0) > 1800]
             for sid in to_delete:
                 del user_sessions[sid]
 
 threading.Thread(target=cleanup_sessions, daemon=True).start()
 
+def update_activity(sid):
+    with session_lock:
+        if sid in user_sessions:
+            user_sessions[sid]['last_accessed'] = time.time()
+
 @app.route('/auth/google/login')
 def google_login():
     flow = get_google_flow(url_for('google_callback', _external=True))
-    auth_url, state = flow.authorization_url()
+    authorization_url, state = flow.authorization_url()
+    session.permanent = True
     session['google_state'] = state
-    return jsonify({'url': auth_url})
+    return jsonify({'url': authorization_url})
 
 @app.route('/auth/google/callback')
 def google_callback():
-    # Verify state to prevent CSRF
     if request.args.get('state') != session.get('google_state'):
         return "Invalid state parameter", 400
 
@@ -61,13 +69,12 @@ def google_callback():
     c = flow.credentials
     with session_lock:
         user_sessions[sid] = {
-            'created_at': time.time(),
+            'last_accessed': time.time(),
             'credentials': {
                 'token': c.token,
                 'refresh_token': c.refresh_token,
                 'token_uri': c.token_uri,
                 'client_id': c.client_id,
-                'client_secret': c.client_secret,
                 'scopes': c.scopes
             }
         }
@@ -76,20 +83,23 @@ def google_callback():
 @app.route('/api/scan', methods=['POST'])
 def scan():
     sid = request.json.get('session_id')
+    update_activity(sid)
     with session_lock:
         ud = user_sessions.get(sid)
     if not ud: return "Unauthorized", 401
+
     service = EmailService(ud['credentials'], lambda c, t: socketio.emit('scan_progress', {'current': c, 'total': t}, room=sid))
     res = analyze_emails(service.fetch_emails(1000))
-    ud['analysis'] = res
     return jsonify(res)
 
 @app.route('/api/delete', methods=['POST'])
 def delete():
     sid = request.json.get('session_id')
+    update_activity(sid)
     with session_lock:
         ud = user_sessions.get(sid)
     if not ud: return "Unauthorized", 401
+
     EmailService(ud['credentials']).delete_emails(request.json.get('email_ids', []))
     return jsonify({'success': True})
 
@@ -104,7 +114,9 @@ def logout():
 @socketio.on('join')
 def on_join(data):
     from flask_socketio import join_room
-    join_room(data.get('session_id'))
+    sid = data.get('session_id')
+    update_activity(sid)
+    join_room(sid)
 
 if __name__ == '__main__':
     socketio.run(app, debug=False, port=5000)
