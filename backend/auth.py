@@ -13,6 +13,9 @@ GOOGLE_SCOPES = [
 ]
 
 def get_google_flow(redirect_uri):
+    """
+    Constructs the Google OAuth flow object using client configuration from env vars.
+    """
     client_config = {
         "web": {
             "client_id": GOOGLE_CLIENT_ID,
