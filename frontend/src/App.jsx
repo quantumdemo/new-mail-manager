@@ -6,6 +6,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
+// Global axios config to ensure cookies (sessions) are passed
+axios.defaults.withCredentials = true;
+
 // --- Components ---
 
 const ThemeToggle = () => {
@@ -112,13 +115,17 @@ export default function App() {
   const [senderToDelete, setSenderToDelete] = useState(null);
   const [isBulkDelete, setIsBulkDelete] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [error, setError] = useState(null);
 
   const startScan = useCallback(async (sid) => {
-    setLoading(true); setScanProgress({ current: 0, total: 1000 });
+    setLoading(true); setScanProgress({ current: 0, total: 1000 }); setError(null);
     try {
       const res = await axios.post(`${API_BASE_URL}/api/scan`, { session_id: sid });
       setStats(res.data);
-    } catch (e) { console.error(e); } finally { setLoading(false); setScanProgress(null); }
+    } catch (e) {
+      console.error(e);
+      setError("Failed to scan inbox. Please ensure your session hasn't expired.");
+    } finally { setLoading(false); setScanProgress(null); }
   }, []);
 
   useEffect(() => {
@@ -135,6 +142,16 @@ export default function App() {
     return () => { window.removeEventListener('message', handleMsg); s.close(); };
   }, [sessionId, startScan]);
 
+  const handleLogin = async () => {
+    setError(null);
+    try {
+      const res = await axios.get(`${API_BASE_URL}/auth/google/login`);
+      window.open(res.data.url, '_blank', 'width=600,height=600');
+    } catch (e) {
+      setError("Failed to initiate login. Please try again.");
+    }
+  };
+
   const handleDelete = async () => {
     setIsDeleting(true);
     try {
@@ -150,9 +167,10 @@ export default function App() {
         <div className="max-w-4xl mx-auto py-20 text-center">
           <h2 className="text-5xl font-extrabold mb-6">Clean Inbox. <span className="text-[#3f51b5]">Free Space.</span></h2>
           <p className="text-xl text-gray-500 mb-12">The privacy-first Gmail cleaner. No data stored. No persistent tokens.</p>
-          <button onClick={() => axios.get(`${API_BASE_URL}/auth/google/login`).then(r => window.open(r.data.url, '_blank', 'width=600,height=600'))} className="bg-[#3f51b5] text-white p-4 rounded-xl font-bold flex items-center gap-2 mx-auto shadow-lg hover:opacity-90">
+          <button onClick={handleLogin} className="bg-[#3f51b5] text-white p-4 rounded-xl font-bold flex items-center gap-2 mx-auto shadow-lg hover:opacity-90">
              Connect Gmail
           </button>
+          {error && <p className="mt-4 text-red-500 font-medium">{error}</p>}
         </div>
       </Layout>
     );
@@ -198,7 +216,7 @@ export default function App() {
                          <td className="px-6 py-4 text-center text-sm">{s.count}</td>
                          <td className="px-6 py-4 text-center text-sm">{Math.round(s.total_size/1024)} KB</td>
                          <td className="px-6 py-4 text-center">
-                           <button onClick={() => { setSenderToDelete(s); setIsBulkDelete(false); }} className="text-red-500 p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full"><Trash2 className="w-4 h-4" /></button>
+                           <button onClick={() => { setSenderToDelete(s); setIsBulkDelete(false); }} className="text-red-500 p-2 hover:bg-red-900/20 rounded-full"><Trash2 className="w-4 h-4" /></button>
                          </td>
                        </tr>
                      ))}
@@ -208,6 +226,7 @@ export default function App() {
             </div>
           </>
         )}
+        {error && <p className="text-red-500 text-center font-medium">{error}</p>}
       </div>
       <DeletionDialog isOpen={!!senderToDelete} sender={senderToDelete} isBulk={isBulkDelete} onConfirm={handleDelete} onCancel={() => setSenderToDelete(null)} isDeleting={isDeleting} />
     </Layout>

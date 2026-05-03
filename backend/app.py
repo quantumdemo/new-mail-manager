@@ -2,6 +2,7 @@ import os
 import datetime
 import threading
 import time
+import logging
 from flask import Flask, request, jsonify, session, url_for
 from flask_cors import CORS
 from flask_socketio import SocketIO
@@ -11,6 +12,11 @@ from email_service import EmailService
 from analysis import analyze_emails
 
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret")
 
@@ -19,7 +25,7 @@ is_prod = os.getenv("FLASK_ENV") == "production"
 app.config.update(
     SESSION_COOKIE_SECURE=is_prod,
     SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SAMESITE='None' if is_prod else 'Lax',
     PERMANENT_SESSION_LIFETIME=datetime.timedelta(minutes=30)
 )
 
@@ -34,10 +40,9 @@ session_lock = threading.Lock()
 def cleanup_sessions():
     """Periodically remove sessions after 30 minutes of inactivity"""
     while True:
-        time.sleep(300) # Every 5 mins
+        time.sleep(300)
         now = time.time()
         with session_lock:
-            # 1800 seconds = 30 minutes
             to_delete = [sid for sid, data in user_sessions.items() if now - data.get('last_accessed', 0) > 1800]
             for sid in to_delete:
                 del user_sessions[sid]
@@ -51,18 +56,39 @@ def update_activity(sid):
 
 @app.route('/auth/google/login')
 def google_login():
-    flow = get_google_flow(url_for('google_callback', _external=True))
+    # Use 127.0.0.1 if calling from localhost to maintain cookie consistency
+    callback_url = url_for('google_callback', _external=True)
+    if "localhost" in callback_url:
+        callback_url = callback_url.replace("localhost", "127.0.0.1")
+
+    flow = get_google_flow(callback_url)
     authorization_url, state = flow.authorization_url()
+
     session.permanent = True
     session['google_state'] = state
+    logger.info(f"Initiating login. Stored state: {state}")
+
     return jsonify({'url': authorization_url})
 
 @app.route('/auth/google/callback')
 def google_callback():
-    if request.args.get('state') != session.get('google_state'):
-        return "Invalid state parameter", 400
+    stored_state = session.get('google_state')
+    received_state = request.args.get('state')
 
-    flow = get_google_flow(url_for('google_callback', _external=True))
+    logger.info(f"Callback received. Stored state: {stored_state}, Received state: {received_state}")
+
+    if not stored_state or received_state != stored_state:
+        return jsonify({
+            "error": "Invalid state parameter",
+            "details": f"Stored: {stored_state}, Received: {received_state}. Ensure you are accessing the app via the same hostname (e.g., 127.0.0.1 vs localhost)."
+        }), 400
+
+    # Reconstruct flow for token fetch
+    callback_url = url_for('google_callback', _external=True)
+    if "localhost" in callback_url:
+        callback_url = callback_url.replace("localhost", "127.0.0.1")
+
+    flow = get_google_flow(callback_url)
     flow.fetch_token(authorization_response=request.url)
 
     sid = os.urandom(16).hex()
@@ -78,6 +104,7 @@ def google_callback():
                 'scopes': c.scopes
             }
         }
+
     return f"<script>window.opener.postMessage({{type:'AUTH_SUCCESS',session_id:'{sid}'}}, '{FRONTEND_URL}');window.close();</script>"
 
 @app.route('/api/scan', methods=['POST'])
